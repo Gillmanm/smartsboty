@@ -3,6 +3,7 @@ import classNames from 'classnames';
 import { api_base } from '@/external/bot-skeleton';
 import { useApiBase } from '@/hooks/useApiBase';
 import { useStore } from '@/hooks/useStore';
+import { WS_SERVERS, isProduction } from '@/components/shared/utils/config/config';
 import {
     AnalyzerSignal,
     AnalyzerSettings,
@@ -70,6 +71,8 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
     const activeEntriesRef = useRef<ActiveEntry[]>([]);
     const subscriptionsRef = useRef<string[]>([]);
     const messageSubscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
+    const publicSocketRef = useRef<WebSocket | null>(null);
+    const publicMessageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null);
     const mountedRef = useRef(true);
 
     const refreshSymbols = useCallback(() => {
@@ -118,8 +121,12 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
     };
 
     const clearSubscriptionRequests = useCallback(() => {
+        const publicSocket = publicSocketRef.current;
         subscriptionsRef.current.forEach(subscriptionId => {
             try {
+                if (publicSocket?.readyState === WebSocket.OPEN) {
+                    publicSocket.send(JSON.stringify({ forget: subscriptionId }));
+                }
                 api_base.api?.send({ forget: subscriptionId });
             } catch (error) {
                 console.warn('Unable to forget analyzer subscription', error);
@@ -132,6 +139,14 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
         clearSubscriptionRequests();
         messageSubscriptionRef.current?.unsubscribe?.();
         messageSubscriptionRef.current = null;
+        const publicSocket = publicSocketRef.current;
+        if (publicSocket) {
+            const handler = publicMessageHandlerRef.current;
+            if (handler) publicSocket.removeEventListener('message', handler);
+            publicSocket.close();
+            publicSocketRef.current = null;
+            publicMessageHandlerRef.current = null;
+        }
         setIsMonitoring(false);
         setStatusMessage('Analyzer stopped. No new entries will be placed.');
     }, [clearSubscriptionRequests]);
@@ -290,25 +305,6 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
         setErrorMessage('');
         setStatusMessage('Connecting to the live market feed...');
 
-        try {
-            const connection = (api_base.api as any)?.connection;
-            if (!api_base.api || connection?.readyState !== 1) {
-                await api_base.init(false);
-            }
-
-            const connectionDeadline = Date.now() + 10000;
-            while ((api_base.api as any)?.connection?.readyState !== 1 && Date.now() < connectionDeadline) {
-                await new Promise(resolve => window.setTimeout(resolve, 100));
-            }
-            if (!(api_base.api as any)?.connection || (api_base.api as any).connection.readyState !== 1) {
-                throw new Error('The live market connection did not open.');
-            }
-        } catch (error) {
-            setErrorMessage(error instanceof Error ? error.message : 'Unable to connect to the live market feed.');
-            setStatusMessage('Analyzer is idle. Check your connection and try again.');
-            return;
-        }
-
         const availableSymbols = getDefaultSymbols(api_base.active_symbols || symbols);
         if (availableSymbols.length && !symbols.length) setSymbols(availableSymbols);
         const symbolsToMonitor = availableSymbols.filter(symbol => isSymbolSelected(symbol.symbol, settings));
@@ -335,7 +331,7 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
         setIsMonitoring(true);
         setStatusMessage(`Monitoring ${symbolsToMonitor.length} market${symbolsToMonitor.length === 1 ? '' : 's'}...`);
 
-        const subscription = api_base.api.onMessage().subscribe((response: any) => {
+        const handleTickResponse = (response: any) => {
             const tick = response?.tick;
             const quote = Number(tick?.quote);
             if (!tick?.symbol || !Number.isFinite(quote)) return;
@@ -344,13 +340,53 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
             if (response.subscription?.id && !subscriptionsRef.current.includes(response.subscription.id)) {
                 subscriptionsRef.current.push(response.subscription.id);
             }
-        });
-        messageSubscriptionRef.current = subscription;
+        };
 
-        symbolsToMonitor.forEach(item => {
-            api_base.api?.send({ ticks: item.symbol, subscribe: 1 });
-        });
-    }, [processTick, settings, symbols, stopMonitoring]);
+        const authenticatedConnection = (api_base.api as any)?.connection;
+        if (isAuthorized && api_base.api && authenticatedConnection?.readyState === WebSocket.OPEN) {
+            const subscription = api_base.api.onMessage().subscribe(handleTickResponse);
+            messageSubscriptionRef.current = subscription;
+            symbolsToMonitor.forEach(item => api_base.api?.send({ ticks: item.symbol, subscribe: 1 }));
+            return;
+        }
+
+        const publicSocket = new WebSocket(isProduction() ? WS_SERVERS.PRODUCTION : WS_SERVERS.STAGING);
+        publicSocketRef.current = publicSocket;
+        const publicMessageHandler = (event: MessageEvent) => {
+            try {
+                handleTickResponse(JSON.parse(String(event.data)));
+            } catch {
+                // Ignore non-JSON socket frames.
+            }
+        };
+        publicMessageHandlerRef.current = publicMessageHandler;
+        publicSocket.addEventListener('message', publicMessageHandler);
+
+        try {
+            await new Promise<void>((resolve, reject) => {
+                const timeout = window.setTimeout(() => reject(new Error('The public market feed did not open in time.')), 10000);
+                const onOpen = () => {
+                    window.clearTimeout(timeout);
+                    resolve();
+                };
+                const onError = () => {
+                    window.clearTimeout(timeout);
+                    reject(new Error('Unable to connect to the public market feed.'));
+                };
+                publicSocket.addEventListener('open', onOpen, { once: true });
+                publicSocket.addEventListener('error', onError, { once: true });
+            });
+            symbolsToMonitor.forEach(item => publicSocket.send(JSON.stringify({ ticks: item.symbol, subscribe: 1 })));
+            setStatusMessage(`Monitoring ${symbolsToMonitor.length} market${symbolsToMonitor.length === 1 ? '' : 's'} on the public live feed...`);
+        } catch (error) {
+            publicSocket.close();
+            publicSocketRef.current = null;
+            publicMessageHandlerRef.current = null;
+            setIsMonitoring(false);
+            setErrorMessage(error instanceof Error ? error.message : 'Unable to connect to the public market feed.');
+            setStatusMessage('Analyzer is idle. Check your connection and try again.');
+        }
+    }, [isAuthorized, processTick, settings, symbols, stopMonitoring]);
 
     const toggleSymbol = (symbol: string) => {
         setSettings(current => {
