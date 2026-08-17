@@ -73,6 +73,10 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
     const messageSubscriptionRef = useRef<{ unsubscribe: () => void } | null>(null);
     const publicSocketRef = useRef<WebSocket | null>(null);
     const publicMessageHandlerRef = useRef<((event: MessageEvent) => void) | null>(null);
+    const publicReconnectTimerRef = useRef<number | null>(null);
+    const publicWatchdogTimerRef = useRef<number | null>(null);
+    const publicLastTickAtRef = useRef(0);
+    const publicConnectedAtRef = useRef(0);
     const mountedRef = useRef(true);
 
     const refreshSymbols = useCallback(() => {
@@ -137,6 +141,16 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
 
     const stopMonitoring = useCallback(() => {
         clearSubscriptionRequests();
+        if (publicReconnectTimerRef.current !== null) {
+            window.clearTimeout(publicReconnectTimerRef.current);
+            publicReconnectTimerRef.current = null;
+        }
+        if (publicWatchdogTimerRef.current !== null) {
+            window.clearInterval(publicWatchdogTimerRef.current);
+            publicWatchdogTimerRef.current = null;
+        }
+        publicLastTickAtRef.current = 0;
+        publicConnectedAtRef.current = 0;
         messageSubscriptionRef.current?.unsubscribe?.();
         messageSubscriptionRef.current = null;
         const publicSocket = publicSocketRef.current;
@@ -335,6 +349,7 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
             const tick = response?.tick;
             const quote = Number(tick?.quote);
             if (!tick?.symbol || !Number.isFinite(quote)) return;
+            publicLastTickAtRef.current = Date.now();
             processTick(String(tick.symbol), { quote, epoch: Number(tick.epoch || Date.now()) });
 
             if (response.subscription?.id && !subscriptionsRef.current.includes(response.subscription.id)) {
@@ -350,36 +365,88 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
             return;
         }
 
-        const publicSocket = new WebSocket(isProduction() ? WS_SERVERS.PRODUCTION : WS_SERVERS.STAGING);
-        publicSocketRef.current = publicSocket;
-        const publicMessageHandler = (event: MessageEvent) => {
+        const publicUrl = isProduction() ? WS_SERVERS.PRODUCTION : WS_SERVERS.STAGING;
+        let connectPublicFeed: () => Promise<void>;
+        connectPublicFeed = async () => {
+            if (!mountedRef.current) return;
+            const publicSocket = new WebSocket(publicUrl);
+            publicSocketRef.current = publicSocket;
+            publicReconnectTimerRef.current = null;
+
+            const publicMessageHandler = (event: MessageEvent) => {
+                try {
+                    handleTickResponse(JSON.parse(String(event.data)));
+                } catch {
+                    // Ignore non-JSON socket frames.
+                }
+            };
+            publicMessageHandlerRef.current = publicMessageHandler;
+            publicSocket.addEventListener('message', publicMessageHandler);
+
+            const scheduleReconnect = () => {
+                if (!mountedRef.current || publicSocketRef.current !== publicSocket) return;
+                if (publicReconnectTimerRef.current !== null) return;
+                setStatusMessage('Public feed disconnected. Reconnecting to live markets...');
+                publicReconnectTimerRef.current = window.setTimeout(() => {
+                    publicReconnectTimerRef.current = null;
+                    void connectPublicFeed();
+                }, 1500);
+            };
+
+            publicSocket.addEventListener('close', scheduleReconnect);
+            publicSocket.addEventListener('error', scheduleReconnect);
+
             try {
-                handleTickResponse(JSON.parse(String(event.data)));
-            } catch {
-                // Ignore non-JSON socket frames.
+                await new Promise<void>((resolve, reject) => {
+                    const timeout = window.setTimeout(() => reject(new Error('The public market feed did not open in time.')), 10000);
+                    const onOpen = () => {
+                        window.clearTimeout(timeout);
+                        publicConnectedAtRef.current = Date.now();
+                        publicLastTickAtRef.current = 0;
+                        resolve();
+                    };
+                    const onError = () => {
+                        window.clearTimeout(timeout);
+                        reject(new Error('Unable to connect to the public market feed.'));
+                    };
+                    publicSocket.addEventListener('open', onOpen, { once: true });
+                    publicSocket.addEventListener('error', onError, { once: true });
+                });
+
+                const sendSubscriptions = (offset = 0) => {
+                    if (publicSocketRef.current !== publicSocket || publicSocket.readyState !== WebSocket.OPEN) return;
+                    const batch = symbolsToMonitor.slice(offset, offset + 20);
+                    batch.forEach(item => publicSocket.send(JSON.stringify({ ticks: item.symbol, subscribe: 1 })));
+                    if (offset + batch.length < symbolsToMonitor.length) {
+                        window.setTimeout(() => sendSubscriptions(offset + batch.length), 75);
+                    }
+                };
+                sendSubscriptions();
+                setErrorMessage('');
+                setStatusMessage(`Monitoring ${symbolsToMonitor.length} market${symbolsToMonitor.length === 1 ? '' : 's'} on the public live feed...`);
+
+                if (publicWatchdogTimerRef.current !== null) window.clearInterval(publicWatchdogTimerRef.current);
+                publicWatchdogTimerRef.current = window.setInterval(() => {
+                    if (publicSocketRef.current === publicSocket && publicSocket.readyState === WebSocket.OPEN) {
+                        // Restart a live socket that opened successfully but stopped delivering ticks.
+                        const lastActivityAt = publicLastTickAtRef.current || publicConnectedAtRef.current;
+                        if (lastActivityAt && Date.now() - lastActivityAt > 15000) publicSocket.close();
+                    }
+                }, 5000);
+            } catch (error) {
+                if (publicSocketRef.current === publicSocket) {
+                    publicSocketRef.current = null;
+                    publicMessageHandlerRef.current = null;
+                }
+                publicSocket.close();
+                throw error;
             }
         };
-        publicMessageHandlerRef.current = publicMessageHandler;
-        publicSocket.addEventListener('message', publicMessageHandler);
 
         try {
-            await new Promise<void>((resolve, reject) => {
-                const timeout = window.setTimeout(() => reject(new Error('The public market feed did not open in time.')), 10000);
-                const onOpen = () => {
-                    window.clearTimeout(timeout);
-                    resolve();
-                };
-                const onError = () => {
-                    window.clearTimeout(timeout);
-                    reject(new Error('Unable to connect to the public market feed.'));
-                };
-                publicSocket.addEventListener('open', onOpen, { once: true });
-                publicSocket.addEventListener('error', onError, { once: true });
-            });
-            symbolsToMonitor.forEach(item => publicSocket.send(JSON.stringify({ ticks: item.symbol, subscribe: 1 })));
-            setStatusMessage(`Monitoring ${symbolsToMonitor.length} market${symbolsToMonitor.length === 1 ? '' : 's'} on the public live feed...`);
+            await connectPublicFeed();
         } catch (error) {
-            publicSocket.close();
+            publicSocketRef.current?.close();
             publicSocketRef.current = null;
             publicMessageHandlerRef.current = null;
             setIsMonitoring(false);
