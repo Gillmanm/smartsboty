@@ -286,13 +286,35 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
         [acceptSignal, settings]
     );
 
-    const startMonitoring = useCallback(() => {
-        if (!api_base.api || !isAuthorized) {
-            setErrorMessage('Log in to a Deriv account before starting the analyzer.');
+    const startMonitoring = useCallback(async () => {
+        setErrorMessage('');
+        setStatusMessage('Connecting to the live market feed...');
+
+        try {
+            const connection = (api_base.api as any)?.connection;
+            if (!api_base.api || connection?.readyState !== 1) {
+                await api_base.init(false);
+            }
+
+            const connectionDeadline = Date.now() + 10000;
+            while ((api_base.api as any)?.connection?.readyState !== 1 && Date.now() < connectionDeadline) {
+                await new Promise(resolve => window.setTimeout(resolve, 100));
+            }
+            if (!(api_base.api as any)?.connection || (api_base.api as any).connection.readyState !== 1) {
+                throw new Error('The live market connection did not open.');
+            }
+        } catch (error) {
+            setErrorMessage(error instanceof Error ? error.message : 'Unable to connect to the live market feed.');
+            setStatusMessage('Analyzer is idle. Check your connection and try again.');
             return;
         }
-        if (!selectedSymbols.length) {
+
+        const availableSymbols = getDefaultSymbols(api_base.active_symbols || symbols);
+        if (availableSymbols.length && !symbols.length) setSymbols(availableSymbols);
+        const symbolsToMonitor = availableSymbols.filter(symbol => isSymbolSelected(symbol.symbol, settings));
+        if (!symbolsToMonitor.length) {
             setErrorMessage('Select at least one market or enable All markets.');
+            setStatusMessage('Analyzer is idle.');
             return;
         }
         if (settings.entryMode === 'automatic') {
@@ -311,12 +333,13 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
         setSignals([]);
         setErrorMessage('');
         setIsMonitoring(true);
-        setStatusMessage(`Monitoring ${selectedSymbols.length} market${selectedSymbols.length === 1 ? '' : 's'}...`);
+        setStatusMessage(`Monitoring ${symbolsToMonitor.length} market${symbolsToMonitor.length === 1 ? '' : 's'}...`);
 
         const subscription = api_base.api.onMessage().subscribe((response: any) => {
             const tick = response?.tick;
-            if (!tick?.symbol || typeof tick.quote !== 'number') return;
-            processTick(String(tick.symbol), { quote: Number(tick.quote), epoch: Number(tick.epoch || Date.now()) });
+            const quote = Number(tick?.quote);
+            if (!tick?.symbol || !Number.isFinite(quote)) return;
+            processTick(String(tick.symbol), { quote, epoch: Number(tick.epoch || Date.now()) });
 
             if (response.subscription?.id && !subscriptionsRef.current.includes(response.subscription.id)) {
                 subscriptionsRef.current.push(response.subscription.id);
@@ -324,10 +347,10 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
         });
         messageSubscriptionRef.current = subscription;
 
-        selectedSymbols.forEach(item => {
+        symbolsToMonitor.forEach(item => {
             api_base.api?.send({ ticks: item.symbol, subscribe: 1 });
         });
-    }, [isAuthorized, processTick, selectedSymbols, settings.accountId, settings.currency, settings.entryMode, settings.stake, stopMonitoring]);
+    }, [processTick, settings, symbols, stopMonitoring]);
 
     const toggleSymbol = (symbol: string) => {
         setSettings(current => {
@@ -524,7 +547,7 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
                         </div>
                         <div className='market-analyzer__table-wrapper'>
                             <table className='market-analyzer__table'>
-                                <thead><tr><th>Market</th><th>Quote</th><th>Move</th><th>Rise/Fall trail</th><th>Run</th><th>Signal</th></tr></thead>
+                                <thead><tr><th>Market</th><th>Quote</th><th>Move</th><th>Rise/Fall trail</th><th>Run</th><th>Signal / action</th></tr></thead>
                                 <tbody>
                                     {selectedSymbols.slice(0, 100).map(item => {
                                         const marketTicks = ticks[item.symbol] || [];
@@ -537,6 +560,7 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
                                             ? movementTrail.map(direction => direction === 'up' ? 'Rise' : direction === 'down' ? 'Fall' : 'Flat').join(', ')
                                             : 'Waiting for movement';
                                         const run = runMapRef.current[item.symbol]?.count || 0;
+                                        const marketSignal = signals.find(signal => signal.symbol === item.symbol);
                                         return <tr key={item.symbol}>
                                             <td><strong>{item.symbol}</strong><small>{item.displayName}</small></td>
                                             <td>{latest ? formatQuote(latest.quote) : '--'}</td>
@@ -552,7 +576,10 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
                                                 <small>{movementTrail.length}/4 moves</small>
                                             </td>
                                             <td>{run}</td>
-                                            <td>{run >= settings.minimumRun ? (move === 'up' ? 'Down next' : move === 'down' ? 'Up next' : 'Waiting') : 'Watching'}</td>
+                                            <td>
+                                                <div>{run >= settings.minimumRun ? (move === 'up' ? 'Down next' : move === 'down' ? 'Up next' : 'Waiting') : 'Watching'}</div>
+                                                {settings.entryMode === 'manual' && marketSignal && <button type='button' className='market-analyzer__button market-analyzer__button--small' onClick={() => void placeEntry(marketSignal)}>Place entry</button>}
+                                            </td>
                                         </tr>;
                                     })}
                                 </tbody>
