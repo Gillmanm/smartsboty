@@ -13,6 +13,7 @@ import {
     formatQuote,
     getAccountKind,
     getDefaultSymbols,
+    getMovementTrail,
     getTickDirection,
     isSymbolSelected,
 } from './market-analyzer-utils';
@@ -523,18 +524,33 @@ const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
                         </div>
                         <div className='market-analyzer__table-wrapper'>
                             <table className='market-analyzer__table'>
-                                <thead><tr><th>Market</th><th>Quote</th><th>Move</th><th>Run</th><th>Signal</th></tr></thead>
+                                <thead><tr><th>Market</th><th>Quote</th><th>Move</th><th>Rise/Fall trail</th><th>Run</th><th>Signal</th></tr></thead>
                                 <tbody>
                                     {selectedSymbols.slice(0, 100).map(item => {
                                         const marketTicks = ticks[item.symbol] || [];
                                         const latest = marketTicks[marketTicks.length - 1];
                                         const previous = marketTicks[marketTicks.length - 2];
                                         const move = getTickDirection(previous?.quote, latest?.quote);
+                                        const movementTrail = getMovementTrail(marketTicks, 4);
+                                        const trailSlots = Array.from({ length: 4 }, (_, index) => movementTrail[index - (4 - movementTrail.length)] || 'flat');
+                                        const trailLabel = movementTrail.length
+                                            ? movementTrail.map(direction => direction === 'up' ? 'Rise' : direction === 'down' ? 'Fall' : 'Flat').join(', ')
+                                            : 'Waiting for movement';
                                         const run = runMapRef.current[item.symbol]?.count || 0;
                                         return <tr key={item.symbol}>
                                             <td><strong>{item.symbol}</strong><small>{item.displayName}</small></td>
                                             <td>{latest ? formatQuote(latest.quote) : '--'}</td>
-                                            <td className={move === 'up' ? 'is-up' : move === 'down' ? 'is-down' : ''}>{move === 'up' ? 'Up' : move === 'down' ? 'Down' : '—'}</td>
+                                            <td className={move === 'up' ? 'is-up' : move === 'down' ? 'is-down' : ''}>{move === 'up' ? 'Rise' : move === 'down' ? 'Fall' : '—'}</td>
+                                            <td className='market-analyzer__trail-cell'>
+                                                <div className='market-analyzer__trail' role='img' aria-label={`${item.symbol} latest movements: ${trailLabel}`}>
+                                                    {trailSlots.map((direction, index) => <span
+                                                        className={classNames('market-analyzer__trail-dot', `market-analyzer__trail-dot--${direction}`)}
+                                                        key={`${item.symbol}-trail-${index}`}
+                                                        title={direction === 'up' ? 'Rise' : direction === 'down' ? 'Fall' : 'Waiting'}
+                                                    >{direction === 'up' ? '▲' : direction === 'down' ? '▼' : '•'}</span>)}
+                                                </div>
+                                                <small>{movementTrail.length}/4 moves</small>
+                                            </td>
                                             <td>{run}</td>
                                             <td>{run >= settings.minimumRun ? (move === 'up' ? 'Down next' : move === 'down' ? 'Up next' : 'Waiting') : 'Watching'}</td>
                                         </tr>;

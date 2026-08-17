@@ -1,6 +1,7 @@
 import {
     clampConcurrentEntries,
     detectReversalSignal,
+    getMovementTrail,
     getOppositeContract,
     getTickDirection,
 } from './market-analyzer-utils';
@@ -53,6 +54,31 @@ describe('market analyzer signal rules', () => {
         expect(clampConcurrentEntries(0)).toBe(1);
         expect(clampConcurrentEntries(40.6)).toBe(41);
         expect(clampConcurrentEntries(1000)).toBe(100);
+    });
+
+    it('returns the latest four rise/fall movements for the visual trail', () => {
+        expect(
+            getMovementTrail([
+                { quote: 100, epoch: 1 },
+                { quote: 101, epoch: 2 },
+                { quote: 100, epoch: 3 },
+                { quote: 100, epoch: 4 },
+                { quote: 102, epoch: 5 },
+                { quote: 101, epoch: 6 },
+                { quote: 103, epoch: 7 },
+            ])
+        ).toEqual(['flat', 'up', 'down', 'up']);
+
+        expect(getMovementTrail([{ quote: 100, epoch: 1 }])).toEqual([]);
+        expect(getMovementTrail([{ quote: 100, epoch: 1 }, { quote: 100, epoch: 2 }])).toEqual(['flat']);
+        expect(getMovementTrail([
+            { quote: 1, epoch: 1 },
+            { quote: 2, epoch: 2 },
+            { quote: 3, epoch: 3 },
+            { quote: 4, epoch: 4 },
+            { quote: 5, epoch: 5 },
+            { quote: 6, epoch: 6 },
+        ])).toEqual(['up', 'up', 'up', 'up']);
     });
 
     it('maps movement direction to the opposite contract', () => {

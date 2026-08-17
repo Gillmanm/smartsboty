@@ -375,6 +375,51 @@
         }
     }
 
+    &__trail-cell {
+        min-width: 11rem;
+
+        small {
+            margin-top: 0.3rem;
+        }
+    }
+
+    &__trail {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.35rem;
+        min-height: 2.2rem;
+        padding: 0.35rem 0.55rem;
+        border: 1px solid var(--border-normal);
+        border-radius: 999px;
+        background: var(--general-main-1);
+    }
+
+    &__trail-dot {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 1.5rem;
+        height: 1.5rem;
+        color: var(--text-less-prominent);
+        font-size: 1.1rem;
+        line-height: 1;
+
+        &--up {
+            color: #1976d2;
+            text-shadow: 0 0 0.5rem rgb(25 118 210 / 35%);
+        }
+
+        &--down {
+            color: #d32f2f;
+            text-shadow: 0 0 0.5rem rgb(211 47 47 / 35%);
+        }
+
+        &--flat {
+            color: var(--text-less-prominent);
+            opacity: 0.45;
+        }
+    }
+
     &__signals {
         display: grid;
         gap: 0.8rem;

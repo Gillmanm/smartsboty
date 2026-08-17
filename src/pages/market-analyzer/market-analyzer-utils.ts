@@ -50,6 +50,23 @@ export const getOppositeContract = (triggerDirection: Exclude<TickDirection, 'fl
     triggerDirection === 'up' ? 'PUT' : 'CALL';
 
 /**
+ * Returns the most recent movement steps for a compact rise/fall trail.
+ * Four markers represent four quote-to-quote movements, not four raw quotes.
+ * The first marker therefore uses the quote immediately before the visible
+ * window whenever that quote exists.
+ */
+export const getMovementTrail = (ticks: AnalyzerTick[], size = 4): TickDirection[] => {
+    if (ticks.length < 2 || size < 1) return [];
+
+    const movements: TickDirection[] = [];
+    for (let index = 1; index < ticks.length; index += 1) {
+        movements.push(getTickDirection(ticks[index - 1].quote, ticks[index].quote));
+    }
+
+    return movements.slice(-size);
+};
+
+/**
  * Returns one signal when the latest tick completes a run of the configured
  * minimum length. Flat ticks reset the run because the market did not move.
  * A completed run is one-shot: callers should not call this again for the
