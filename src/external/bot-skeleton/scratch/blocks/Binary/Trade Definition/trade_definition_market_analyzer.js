@@ -92,6 +92,9 @@ window.Blockly.JavaScript.javascriptGenerator.forBlock.trade_definition_market_a
         window.DerivMarketAnalyzerConfig = ${JSON.stringify(config)};
         if (window.SmartbotMarketAnalyzer && typeof window.SmartbotMarketAnalyzer.configure === 'function') {
             window.SmartbotMarketAnalyzer.configure(window.DerivMarketAnalyzerConfig);
+            if (typeof window.SmartbotMarketAnalyzer.start === 'function') {
+                window.SmartbotMarketAnalyzer.start();
+            }
         }
     `;
 };

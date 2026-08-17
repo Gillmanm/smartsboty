@@ -18,6 +18,10 @@ import {
 } from './market-analyzer-utils';
 import './market-analyzer.scss';
 
+type MarketAnalyzerProps = {
+    runtimeOnly?: boolean;
+};
+
 type SymbolDescriptor = {
     symbol: string;
     displayName: string;
@@ -38,7 +42,7 @@ const MAX_TICK_HISTORY = 32;
 
 const getLoginId = () => localStorage.getItem('active_loginid') || (api_base.account_info as any)?.loginid || '';
 
-const MarketAnalyzer = () => {
+const MarketAnalyzer = ({ runtimeOnly = false }: MarketAnalyzerProps) => {
     const storedConfig = (window as any).DerivMarketAnalyzerConfig || {};
     const { accountList, isAuthorized, activeLoginid } = useApiBase();
     const { run_panel } = useStore();
@@ -351,20 +355,39 @@ const MarketAnalyzer = () => {
     };
 
     useEffect(() => {
-        (window as any).SmartbotMarketAnalyzer = {
-            configure: (config: Partial<AnalyzerSettings>) =>
-                setSettings(current => ({ ...current, ...config, maxConcurrentEntries: clampConcurrentEntries(config.maxConcurrentEntries ?? current.maxConcurrentEntries) })),
-            start: startMonitoring,
+        const bridge = {
+            configure: (config: Partial<AnalyzerSettings>) => {
+                (window as any).DerivMarketAnalyzerConfig = {
+                    ...(window as any).DerivMarketAnalyzerConfig,
+                    ...config,
+                    maxConcurrentEntries: clampConcurrentEntries(
+                        config.maxConcurrentEntries ?? DEFAULT_ANALYZER_SETTINGS.maxConcurrentEntries
+                    ),
+                };
+                setSettings(current => ({
+                    ...current,
+                    ...config,
+                    maxConcurrentEntries: clampConcurrentEntries(config.maxConcurrentEntries ?? current.maxConcurrentEntries),
+                }));
+            },
+            start: () => {
+                window.setTimeout(() => startMonitoring(), 0);
+            },
             stop: stopMonitoring,
             placeEntry,
         };
+        (window as any).SmartbotMarketAnalyzer = bridge;
         return () => {
-            delete (window as any).SmartbotMarketAnalyzer;
+            if ((window as any).SmartbotMarketAnalyzer === bridge) {
+                delete (window as any).SmartbotMarketAnalyzer;
+            }
         };
     }, [placeEntry, startMonitoring, stopMonitoring]);
 
     const latestSignal = signals[0];
     const activeAccountId = settings.accountId || getLoginId();
+
+    if (runtimeOnly) return null;
 
     return (
         <section className={classNames('market-analyzer', { 'market-analyzer--overlay': isOverlay })}>

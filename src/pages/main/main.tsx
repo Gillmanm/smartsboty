@@ -473,6 +473,7 @@ const AppWrapper = observer(() => {
                                 </div>
                             </div>
                         </Tabs>
+                        {active_tab !== DBOT_TABS.MARKET_ANALYZER && <MarketAnalyzer runtimeOnly />}
                         {!isDesktop && right_tab_shadow && <span className='tabs-shadow tabs-shadow--right' />}{' '}
                     </div>
                 </div>
