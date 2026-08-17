@@ -101,6 +101,13 @@ export const ToolboxItems = () =>
                         </Block>
                     </Statement>
                 </Block>
+                <Block type='trade_definition_market_analyzer'>
+                    <Field name='MARKET_SCOPE'>ALL</Field>
+                    <Field name='SYMBOLS'></Field>
+                    <Field name='MIN_RUN'>4</Field>
+                    <Field name='ENTRY_MODE'>manual</Field>
+                    <Field name='MAX_CONCURRENT'>1</Field>
+                </Block>
                 <Block type='trade_definition_tradeoptions'>
                     <Mutation has_first_barrier='false' has_second_barrier='false' has_prediction='false' />
                     <Field name='DURATIONTYPE_LIST' />

@@ -6,6 +6,7 @@ import './trade_definition_candleinterval';
 import './trade_definition_restartbuysell';
 import './trade_definition_restartonerror';
 import './trade_definition_tradeoptions';
+import './trade_definition_market_analyzer';
 import './trade_definition_multiplier';
 import './multiplier_stop_loss';
 import './accumulator_take_profit';
